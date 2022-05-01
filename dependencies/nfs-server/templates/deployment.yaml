@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.appname }}-deployment
+  labels:
+    app: {{ .Values.appname }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ .Values.appname }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.appname }}
+    spec:
+      containers:
+      - name: {{ .Values.appname }}
+        image: {{ .Values.image.repository }}
+        volumeMounts:
+        - mountPath: /nfs
+          name: vol-nfs
+        securityContext:
+          privileged: true
+        ports:
+        - containerPort: 2049
+        env:
+        - name: SHARED_DIRECTORY
+          value: /nfs
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                - {{ .Values.nodeName }}
+      volumes:
+      - name: vol-nfs
+        persistentVolumeClaim:
+          claimName: {{ .Values.pvc.name }}
+

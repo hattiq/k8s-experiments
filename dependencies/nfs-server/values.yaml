@@ -1,0 +1,21 @@
+appname: nfs-server
+
+replicaCount: 1
+
+nodeName: node1
+
+image:
+  repository: docker.io/itsthenetwork/nfs-server-alpine
+
+service:
+  name: nfs
+
+pvc:
+  name: pvc-nfs
+  storage: 5Gi
+
+pv:
+  name: pv-nfs
+  storage: 5Gi
+  hostPath: /srv/nfs
+

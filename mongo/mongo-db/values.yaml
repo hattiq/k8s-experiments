@@ -1,0 +1,26 @@
+############################
+### mongo-db-values.yaml ###
+############################
+
+# mongo db deployment name 
+depName: mongo-db
+
+# 
+labels:
+  app: mongo
+
+#
+replicaCount: 2
+
+# 
+image:
+  repository: mongo
+  pullPolicy: Always
+  tag: 4.4
+
+containerPort: 27017
+
+service:
+  name: mongo
+  type: ClusterIP
+  port: 27017

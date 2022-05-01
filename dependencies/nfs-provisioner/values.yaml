@@ -1,0 +1,6 @@
+nfs:
+  server: nfs
+  path: /
+storageClass:
+  name: nfs-storage
+

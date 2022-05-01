@@ -1,0 +1,137 @@
+---
+- name: Install Dependencies
+  hosts: nodes
+  any_errors_fatal: true
+  tasks:
+    - name: Update apt packages
+      apt:
+        upgrade: no
+        update_cache: yes
+        cache_valid_time: 300 # 5 minutes
+    
+    - name: Install nfs dependencies
+      apt:
+        update_cache: yes
+        state: latest
+        pkg:
+        - nfs-common
+
+- name: Playbook to configure HELM Chart and install it into the k8s cluster
+  hosts: targets
+  any_errors_fatal: true
+  collections:
+    - kubernetes.core
+  tasks:
+    - name: Install Openshift dependency for Ansible Kubernetes
+      ansible.builtin.pip:
+        name: openshift
+    
+    - name: Clone Hiring Helm Chart From GitLab Repo.
+      ansible.builtin.git:
+      # git:
+        repo: "https://{{ git_user | urlencode }}:{{ git_password | urlencode }}@gitlab.com/rekruit/infra.git"
+        dest: "{{ repo_download_path }}"
+        version: "{{ repo_branch }}" 
+ 
+    - name: Add metallb helm chart repo
+      kubernetes.core.helm_repository:
+        name: metallb
+        repo_url: "https://metallb.github.io/metallb"
+
+    - name: Install metallb
+      kubernetes.core.helm:
+        name: metallb
+        chart_ref: metallb/metallb
+        release_namespace: metallb-system
+        create_namespace: yes
+        values:
+          configInline:
+            address-pools:
+              - name: default
+                protocol: layer2
+                addresses:
+                  - "{{ metallb_ip_pool }}"
+        values_files:
+          - "{{ repo_download_path }}/dependencies/metallb/values.yaml"
+
+    - name: Waiting for metallb to get ready
+      shell: kubectl wait -n metallb-system --for=jsonpath='{.status.phase}'=Running pods --selector app.kubernetes.io/name=metallb --timeout=100s -o go-template={{ '{{' }}.status.phase{{ '}}' }}
+      register: metallb_status
+    
+    - name: Add nginx ingress cotroller helm repo
+      kubernetes.core.helm_repository:
+        name: ingress-nginx
+        repo_url: "https://kubernetes.github.io/ingress-nginx"
+
+    - name: Install nginx ingress controller
+      kubernetes.core.helm:
+        name: ingress-nginx
+        chart_ref: ingress-nginx/ingress-nginx
+        release_namespace: ingress-nginx
+        create_namespace: yes
+
+    - name: Waiting for nginx ingress controller to get ready
+      shell: kubectl wait -n ingress-nginx --for=jsonpath='{.status.phase}'=Running pods --selector app.kubernetes.io/name=ingress-nginx --timeout=100s -o go-template={{ '{{' }}.status.phase{{ '}}' }}
+      register: ingress_nginx_status
+
+    - name: Add mongodb helm chart repo for operator
+      kubernetes.core.helm_repository:
+        name: mongodb 
+        repo_url: "https://mongodb.github.io/helm-charts"            
+    
+    - name: Deploy MongoDB Community Operator
+      kubernetes.core.helm:
+        name: mongodb-community-operator
+        chart_ref: mongodb/community-operator
+        release_namespace: "{{ hiring_screener_ns }}"
+        create_namespace: yes
+        values:
+          operator:
+            resources:
+              requests:
+                cpu: 100m
+
+    - name: Waiting for MongoDB Operator to get ready
+      shell: kubectl wait -n "{{ hiring_screener_ns }}" --for=jsonpath='{.status.phase}'=Running pods --selector name=mongodb-kubernetes-operator --timeout=100s -o go-template={{ '{{' }}.status.phase{{ '}}' }}
+      register: mongodb_operator_status
+   
+    - name: Create Directory for NFS volumes
+      file:
+        path: /srv/nfs
+        state: directory
+        mode: "0755"
+      register: nfs_dir_created
+
+    - name: Deploy NFS Server Helm Chart into K8s Cluster.
+      when: nfs_dir_created
+      kubernetes.core.helm:
+        name: nfs-server
+        chart_ref: "{{ repo_download_path }}/dependencies/nfs-server/"
+        release_namespace: "{{ hiring_screener_ns }}"
+        create_namespace: yes
+        values:
+          nodeName: "{{ nfs_nodeName }}"
+    
+    - name: Waiting for NFS Server to get ready
+      shell: kubectl wait  -n "{{ hiring_screener_ns }}" --for=jsonpath='{.status.phase}'=Running pods --selector app=nfs-server --timeout=100s -o go-template={{ '{{' }}.status.phase{{ '}}' }}
+      register: nfs_server_status
+
+    - name: Add NFS Dynamic Provisioner helm chart repo
+      when: nfs_server_status.stdout == "Running"
+      kubernetes.core.helm_repository:
+        name: nfs-subdir-external-provisioner
+        repo_url: "https://kubernetes-sigs.github.io/nfs-subdir-external-provisioner/"
+
+    - name: Deploy NFS Dynamic Volume Provisoner Helm Chart into K8s Cluster.
+      kubernetes.core.helm:
+        name: nfs-subdir-external-provisioner
+        chart_ref: nfs-subdir-external-provisioner/nfs-subdir-external-provisioner
+        release_namespace: "{{ hiring_screener_ns }}"
+        create_namespace: yes
+        values_files:
+          - "{{ repo_download_path }}/dependencies/nfs-provisioner/values.yaml"
+    
+    - name: Waiting for NFS Dynamic Provisioner to get ready
+      shell: kubectl wait -n "{{ hiring_screener_ns }}" --for=jsonpath='{.status.phase}'=Running pods --selector app=nfs-subdir-external-provisioner --timeout=100s -o go-template={{ '{{' }}.status.phase{{ '}}' }}
+      register: nfs_provisioner_status
+
